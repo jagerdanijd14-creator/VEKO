@@ -25,11 +25,19 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('products');
   const codeInputRef = useRef(null);
 
-  const [categories, setCategories] = useState(['VEKO', 'Mosószer', 'Öblítő', 'Tisztítószer', 'Papíráru', 'Testápolás']);
-  const [shelves, setShelves] = useState([
-    { id: 1, name: 'A001', category: 'Öblítő' },
-    { id: 2, name: 'A002', category: 'Tisztítószer' },
-  ]);
+  const [categories, setCategories] = useState(() => {
+    const saved = localStorage.getItem('veko_categories');
+    return saved ? JSON.parse(saved) : ['VEKO', 'Mosószer', 'Öblítő', 'Tisztítószer', 'Papíráru', 'Testápolás'];
+  });
+
+  const [shelves, setShelves] = useState(() => {
+    const saved = localStorage.getItem('veko_shelves');
+    return saved ? JSON.parse(saved) : [
+      { id: 1, name: 'A001', category: 'Öblítő' },
+      { id: 2, name: 'A002', category: 'Tisztítószer' },
+    ];
+  });
+
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processingImage, setProcessingImage] = useState(false);
@@ -50,17 +58,6 @@ export default function App() {
     status: 'Tükrözendő',
   });
 
-  // Szűrési és rendezési állapotok
-  const [filterCode, setFilterCode] = useState('');
-  const [filterName, setFilterName] = useState('');
-  const [filterCategory, setFilterCategory] = useState('');
-  const [filterLocation, setFilterLocation] = useState('');
-  const [filterQuantity, setFilterQuantity] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-
-  const [sortBy, setSortBy] = useState('name');
-  const [sortOrder, setSortOrder] = useState('asc');
-
   // Adatok betöltése a Firestore-ból induláskor
   useEffect(() => {
     async function fetchData() {
@@ -79,6 +76,9 @@ export default function App() {
     }
     fetchData();
   }, []);
+
+  useEffect(() => { localStorage.setItem('veko_categories', JSON.stringify(categories)); }, [categories]);
+  useEffect(() => { localStorage.setItem('veko_shelves', JSON.stringify(shelves)); }, [shelves]);
 
   const handleSaveApiKey = (key) => {
     setGeminiApiKey(key);
@@ -108,15 +108,17 @@ export default function App() {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    if (!geminiApiKey.trim()) {
+    let currentApiKey = geminiApiKey;
+    if (!currentApiKey.trim()) {
       const key = prompt("Kérlek, add meg a Gemini API kulcsodat a képfeldolgozáshoz:");
       if (!key) return;
       handleSaveApiKey(key);
+      currentApiKey = key;
     }
 
     setProcessingImage(true);
     try {
-      const ai = new GoogleGenerativeAI({ apiKey: geminiApiKey });
+      const ai = new GoogleGenerativeAI({ apiKey: currentApiKey });
       const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
 
       let allExtractedItems = [];
@@ -134,13 +136,11 @@ export default function App() {
         const response = await model.generateContent([prompt, imagePart]);
         const textResponse = response.response.text();
         
-        // JSON tisztítása és feldolgozása
         const cleanedJson = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
         const parsedItems = JSON.parse(cleanedJson);
         allExtractedItems = [...allExtractedItems, ...parsedItems];
       }
 
-      // Adatok szinkronizálása a Firestore adatbázissal
       const updatedProducts = [...products];
 
       for (const item of allExtractedItems) {
@@ -149,13 +149,11 @@ export default function App() {
         const status = qty <= 0 ? 'Elfogyott' : 'Tükrözendő';
 
         if (existingIndex >= 0) {
-          // Meglévő termék frissítése
           const target = updatedProducts[existingIndex];
           target.quantity = qty;
           target.status = status;
           await setDoc(doc(db, "products", String(target.id)), target);
         } else {
-          // Új termék létrehozása
           const newId = String(Date.now() + Math.random());
           const newItem = {
             id: newId,
@@ -182,23 +180,6 @@ export default function App() {
       setProcessingImage(false);
       e.target.value = null;
     }
-  };
-
-  const handleAddCategory = (e) => {
-    e.preventDefault();
-    if (!newCategoryName.trim()) return;
-    const formattedCat = newCategoryName.trim();
-    if (categories.includes(formattedCat)) return;
-    setCategories([...categories, formattedCat].sort((a, b) => a.localeCompare(b, 'hu')));
-    setNewCategoryName('');
-  };
-
-  const handleAddShelf = (e) => {
-    e.preventDefault();
-    if (!newShelfName.trim()) return;
-    const item = { id: Date.now(), name: newShelfName.trim(), category: newShelfCategory };
-    setShelves([...shelves, item]);
-    setNewShelfName('');
   };
 
   const handleAddProduct = async (e) => {
@@ -274,25 +255,6 @@ export default function App() {
     }
   };
 
-  const filteredAndSortedProducts = products.filter((p) => {
-    return (
-      (p.code || '').toLowerCase().includes(filterCode.toLowerCase()) &&
-      (p.name || '').toLowerCase().includes(filterName.toLowerCase()) &&
-      (filterCategory === '' || p.category === filterCategory) &&
-      (p.locationFormat || '').toLowerCase().includes(filterLocation.toLowerCase()) &&
-      (filterQuantity === '' || String(p.quantity).includes(filterQuantity)) &&
-      (filterStatus === '' || p.status === filterStatus)
-    );
-  }).sort((a, b) => {
-    let valA = a[sortBy] || '';
-    let valB = b[sortBy] || '';
-    if (sortBy === 'quantity') {
-      return sortOrder === 'asc' ? Number(valA) - Number(valB) : Number(valB) - Number(valA);
-    }
-    const comp = String(valA).localeCompare(String(valB), 'hu', { numeric: true });
-    return sortOrder === 'asc' ? comp : -comp;
-  });
-
   if (loading) {
     return <div style={{ padding: '40px', textAlign: 'center', fontSize: '18px' }}>Kapcsolódás a Firebase Firestore adatbázishoz...</div>;
   }
@@ -319,11 +281,11 @@ export default function App() {
             <div style={{ ...styles.card, background: 'linear-gradient(135deg, #1a237e 0%, #3949ab 100%)', color: '#fff' }}>
               <h3 style={{ margin: '0 0 10px 0' }}>📸 PDT Lista Fotózás & Gemini AI Feldolgozás</h3>
               <p style={{ fontSize: '13px', opacity: 0.9, marginBottom: '15px' }}>
-                Tölts fel akár több oldalas PDT listafotót is. A Gemini AI automatikusan felismeri a termékeket, frissíti a meglévők raktárkészletét, vagy létrehozza az újakat a Firestore adatbázisban[span_1](start_span)[span_1](end_span)!
+                Tölts fel PDT listafotót. A Gemini AI felismeri a tételeket, frissíti a készletet, vagy újakat hoz létre a Firestore-ban.
               </p>
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <label style={styles.uploadBtn}>
-                  {processingImage ? 'Feldolgozás alatt...' : '📁 PDT Képek Kiválasztása / Fotózása'}
+                  {processingImage ? 'Feldolgozás alatt...' : '📁 PDT Kép(ek) Kiválasztása / Fotózása'}
                   <input type="file" accept="image/*" multiple onChange={handleImageUpload} style={{ display: 'none' }} disabled={processingImage} />
                 </label>
                 {processingImage && <span style={{ fontSize: '13px', fontStyle: 'italic' }}>Kérlek várj, a Gemini elemzi a képet...</span>}
@@ -334,7 +296,7 @@ export default function App() {
             <div style={styles.card}>
               <h3>{editingId ? 'Termék Szerkesztése' : 'Új Termék Rögzítése'}</h3>
               <form onSubmit={handleAddProduct} style={styles.formGrid}>
-                <input type="text" placeholder="Cikkszám" value={newProduct.code} onChange={(e) => setNewProduct({ ...newProduct, code: e.target.value })} style={styles.input} />
+                <input ref={codeInputRef} type="text" placeholder="Cikkszám" value={newProduct.code} onChange={(e) => setNewProduct({ ...newProduct, code: e.target.value })} style={styles.input} />
                 <input type="text" placeholder="Termék neve" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} style={styles.input} />
                 <select value={newProduct.category} onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })} style={styles.input}>
                   {categories.map((c, i) => <option key={i} value={c}>{c}</option>)}
@@ -345,7 +307,7 @@ export default function App() {
             </div>
 
             <div style={styles.card}>
-              <h3>Termékek ({filteredAndSortedProducts.length})</h3>
+              <h3>Termékek listája ({products.length})</h3>
               <table style={styles.table}>
                 <thead>
                   <tr style={styles.tableHeader}>
@@ -359,7 +321,7 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAndSortedProducts.map((p) => (
+                  {products.map((p) => (
                     <tr key={p.id} style={styles.tableRow}>
                       <td style={styles.td}>{p.code}</td>
                       <td style={styles.td}><strong>{p.name}</strong></td>

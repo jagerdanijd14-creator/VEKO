@@ -4,9 +4,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import { getFirestore, collection, getDocs, setDoc, doc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-// Google Generative AI SDK importálása a képfeldolgozáshoz
-import { GoogleGenerativeAI } from "https://esm.run/@google/genai";
-
 const firebaseConfig = {
   apiKey: "AIzaSyB23-KbyZjY5LhNziuLhK_0x1YbXCryFRo",
   authDomain: "veko-b98e7.firebaseapp.com",
@@ -17,7 +14,6 @@ const firebaseConfig = {
   measurementId: "G-3Y4D277585"
 };
 
-// Firebase inicializálás
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
@@ -58,7 +54,6 @@ export default function App() {
     status: 'Tükrözendő',
   });
 
-  // Adatok betöltése a Firestore-ból induláskor
   useEffect(() => {
     async function fetchData() {
       try {
@@ -85,25 +80,16 @@ export default function App() {
     localStorage.setItem('veko_gemini_key', key);
   };
 
-  // Kép konvertálása Base64 formátumba a Gemini számára
-  const fileToGenerativePart = (file) => {
+  const fileToBase64 = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64Data = reader.result.split(',')[1];
-        resolve({
-          inlineData: {
-            data: base64Data,
-            mimeType: file.type
-          },
-        });
-      };
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
   };
 
-  // PDT Lista Kép Feldolgozása a Gemini AI-vel
+  // Gemini API közvetlen hívása fetch-csel (biztonságos, nincs fehér képernyő)
   const handleImageUpload = async (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -118,23 +104,37 @@ export default function App() {
 
     setProcessingImage(true);
     try {
-      const ai = new GoogleGenerativeAI({ apiKey: currentApiKey });
-      const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
-
       let allExtractedItems = [];
 
       for (let i = 0; i < files.length; i++) {
-        const imagePart = await fileToGenerativePart(files[i]);
+        const base64Data = await fileToBase64(files[i]);
         
-        const prompt = `Elemezd ezt a Penny VEKO PDT listát vagy raktárkészlet képet! Olvasd ki a tételsorokat, és add vissza kizárólag egy tiszta JSON tömb formájában (semmilyen más szöveget ne írj köré, csak a JSON-t). 
-        Minden elem objektum legyen a következő kulcsokkal:
-        - "code": cikkszám (string)
-        - "name": termék teljes neve (string)
-        - "quantity": raktár mennyiség (szám)
-        Ha egy mező nem olvasható, adj meg alapértelmezett értéket.`;
+        const payload = {
+          contents: [
+            {
+              parts: [
+                {
+                  text: "Elemezd ezt a Penny VEKO PDT listát vagy raktárkészlet képet! Olvasd ki a tételsorokat, és add vissza kizárólag egy tiszta JSON tömb formájában (semmilyen más szöveget ne írj köré, csak a JSON-t). Minden elem objektum legyen a következő kulcsokkal: 'code' (cikkszám string), 'name' (termék neve string), 'quantity' (raktár mennyiség szám)."
+                },
+                {
+                  inline_data: {
+                    mime_type: files[i].type,
+                    data: base64Data
+                  }
+                }
+              ]
+            }
+          ]
+        };
 
-        const response = await model.generateContent([prompt, imagePart]);
-        const textResponse = response.response.text();
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        const textResponse = data.candidates[0].content.parts[0].text;
         
         const cleanedJson = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
         const parsedItems = JSON.parse(cleanedJson);
@@ -172,10 +172,10 @@ export default function App() {
       }
 
       setProducts(updatedProducts);
-      alert(`Sikeres feldolgozás! ${allExtractedItems.length} tétel feldolgozva és szinkronizálva a Firestore-ral.`);
+      alert(`Sikeres feldolgozás! ${allExtractedItems.length} tétel szinkronizálva a Firestore-ral.`);
     } catch (error) {
       console.error("Hiba a képfeldolgozás során:", error);
-      alert("Hiba történt a kép elemzésekor. Kérlek ellenőrizd az API kulcsot vagy a kép minőségét.");
+      alert("Hiba történt a kép elemzésekor. Ellenőrizd az API kulcsot!");
     } finally {
       setProcessingImage(false);
       e.target.value = null;
@@ -264,7 +264,7 @@ export default function App() {
       <header style={styles.header}>
         <div style={styles.logoArea}>
           <h1 style={styles.title}>PENNY - VEKO Asszisztens</h1>
-          <span style={styles.subtitle}>Gemini AI + Firestore | Termékek: {products.length} db</span>
+          <span style={styles.subtitle}>Gemini API + Firestore | Termékek: {products.length} db</span>
         </div>
         <nav style={styles.nav}>
           <button style={activeTab === 'products' ? { ...styles.navBtn, ...styles.activeNavBtn } : styles.navBtn} onClick={() => setActiveTab('products')}>📦 Termékek</button>
@@ -277,7 +277,6 @@ export default function App() {
       <main style={styles.main}>
         {activeTab === 'products' && (
           <div>
-            {/* Képfeltöltő sáv a Gemini AI-hez */}
             <div style={{ ...styles.card, background: 'linear-gradient(135deg, #1a237e 0%, #3949ab 100%)', color: '#fff' }}>
               <h3 style={{ margin: '0 0 10px 0' }}>📸 PDT Lista Fotózás & Gemini AI Feldolgozás</h3>
               <p style={{ fontSize: '13px', opacity: 0.9, marginBottom: '15px' }}>
